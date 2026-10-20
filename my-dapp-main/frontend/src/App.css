@@ -1961,3 +1961,123 @@ a {
   opacity: 0.6;
   cursor: not-allowed;
 }
+/* =========================================================
+   SIGN-IN PANEL + ACCOUNT SETTINGS (username & password)
+   ========================================================= */
+
+.auth-panel {
+  width: min(440px, 100%);
+  margin: 40px auto;
+  padding: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+
+.auth-title {
+  margin: 0 0 6px;
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.auth-desc {
+  margin: 0 0 22px;
+  color: var(--text-soft);
+  font-size: 14px;
+}
+
+.auth-panel .view-tabs {
+  margin-bottom: 22px;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.auth-form .btn-primary {
+  width: 100%;
+  justify-content: center;
+}
+
+.auth-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-soft);
+}
+
+.auth-input {
+  height: 42px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  transition: border-color var(--fast), box-shadow var(--fast);
+}
+
+.auth-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-glow);
+}
+
+.auth-hint {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-soft);
+}
+
+.auth-error {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.auth-success {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--success-soft);
+  color: var(--success);
+  font-size: 13px;
+}
+
+.account-modal {
+  width: min(480px, 100%);
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  text-align: left;
+}
+
+.account-section {
+  margin: 20px 0;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.account-section-title {
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.account-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}

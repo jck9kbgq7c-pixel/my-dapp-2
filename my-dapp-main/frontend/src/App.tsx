@@ -10,10 +10,21 @@ import {
   tip,
   togglePin,
   toggleShare,
+  getUsername,
+  setPassword,
+  removePassword,
 } from "./thebes";
 import type { FeedNote, TipRecord } from "./thebes";
 import { useMemphisConnect } from "./lib/useMemphisConnect";
 import type { MemphisConnectAuth } from "./lib/useMemphisConnect";
+import {
+  usePasswordSession,
+  derivePasswordKey,
+  isValidUsername,
+  normalizeUsername,
+  friendlyError,
+  MIN_PASSWORD_LENGTH,
+} from "./lib/usePasswordSession";
 import "./App.css";
 
 // ────────────────────────────────────────────────────────────
@@ -102,21 +113,65 @@ function wordCount(text: string): number {
 //  Root component
 // ────────────────────────────────────────────────────────────
 
-export default function App() {
-  const auth = useMemphisConnect("my-dapp");
+export type ActiveSession = {
+  method: "passkey" | "password";
+  /** Token passed to every contract call (passkey token or password session token). */
+  token: string;
+  displayName: string;
+  /** Only present for passkey sessions — needed to set or remove a password. */
+  passkeyToken?: string;
+  signOut: () => void;
+};
 
-  if (!auth.signedIn || !auth.token) {
-    return <ConnectGate auth={auth} />;
+export default function App() {
+  const passkey = useMemphisConnect("my-dapp");
+  const password = usePasswordSession();
+
+  const signOutAll = () => {
+    passkey.signOut();
+    password.signOut();
+  };
+
+  let active: ActiveSession | null = null;
+  if (passkey.signedIn && passkey.token) {
+    active = {
+      method: "passkey",
+      token: passkey.token,
+      displayName: passkey.displayName || "Passkey user",
+      passkeyToken: passkey.token,
+      signOut: signOutAll,
+    };
+  } else if (password.session) {
+    active = {
+      method: "password",
+      token: password.session.token,
+      displayName: password.session.username,
+      signOut: signOutAll,
+    };
   }
 
-  return <NotesApp tokenHex={auth.token} auth={auth} />;
+  if (!active) {
+    return <ConnectGate passkey={passkey} password={password} />;
+  }
+
+  return <NotesApp key={active.token} tokenHex={active.token} session={active} />;
 }
 
 // ────────────────────────────────────────────────────────────
 //  ConnectGate — sign-in screen shown while signed out
 // ────────────────────────────────────────────────────────────
 
-function ConnectGate({ auth }: { auth: MemphisConnectAuth }) {
+function ConnectGate({
+  passkey,
+  password,
+}: {
+  passkey: MemphisConnectAuth;
+  password: ReturnType<typeof usePasswordSession>;
+}) {
+  const [method, setMethod] = useState<"passkey" | "password">("passkey");
+  const [username, setUsername] = useState("");
+  const [pw, setPw] = useState("");
+
   return (
     <div className="page-root">
       <nav className="navbar" role="navigation" aria-label="Main navigation">
@@ -130,32 +185,99 @@ function ConnectGate({ auth }: { auth: MemphisConnectAuth }) {
       </nav>
 
       <main className="page-content" role="main">
-        {auth.error && (
-          <div className="error-banner" role="alert">
-            <span aria-hidden="true">⚠</span>
-            {auth.error}
-          </div>
-        )}
+        <section className="auth-panel" aria-labelledby="auth-title">
+          <h1 id="auth-title" className="auth-title">Sign in to Thebes Notes</h1>
+          <p className="auth-desc">Your private, on-chain notes.</p>
 
-        <div className="empty-state" role="status">
-          <div className="empty-icon-wrap" aria-hidden="true">⚷</div>
-          <h1 className="empty-title">Sign in to Thebes Notes</h1>
-          <p className="empty-desc">
-            Use your Memphis passkey to open your private, on-chain notes.
-          </p>
-          <button
-            id="sign-in-btn"
-            type="button"
-            className="btn-primary"
-            onClick={() => {
-              auth.signIn({ mode: "auto" }).catch(() => {});
-            }}
-            disabled={auth.busy}
-          >
-            <span aria-hidden="true">⚷</span>
-            {auth.busy ? "Signing in…" : "Sign in with passkey"}
-          </button>
-        </div>
+          <div className="view-tabs" role="tablist" aria-label="Sign-in method">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={method === "passkey"}
+              className={`view-tab${method === "passkey" ? " active" : ""}`}
+              onClick={() => setMethod("passkey")}
+            >
+              <span aria-hidden="true">⚷</span> Passkey
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={method === "password"}
+              className={`view-tab${method === "password" ? " active" : ""}`}
+              onClick={() => setMethod("password")}
+            >
+              <span aria-hidden="true">🔑</span> Username &amp; password
+            </button>
+          </div>
+
+          {method === "passkey" ? (
+            <div className="auth-form">
+              {passkey.error && <p className="auth-error" role="alert">{passkey.error}</p>}
+              <p className="auth-hint">
+                Use your fingerprint, face or screen lock. A new name creates an
+                account; an existing name signs in.
+              </p>
+              <button
+                id="sign-in-btn"
+                type="button"
+                className="btn-primary"
+                onClick={() => {
+                  passkey.signIn({ mode: "auto" }).catch(() => {});
+                }}
+                disabled={passkey.busy}
+              >
+                <span aria-hidden="true">⚷</span>
+                {passkey.busy ? "Signing in…" : "Sign in with passkey"}
+              </button>
+            </div>
+          ) : (
+            <form
+              className="auth-form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void password.signIn(username, pw).then(() => setPw(""));
+              }}
+            >
+              {password.error && <p className="auth-error" role="alert">{password.error}</p>}
+              <label className="auth-field">
+                <span>Username</span>
+                <input
+                  className="auth-input"
+                  type="text"
+                  autoComplete="username"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  required
+                />
+              </label>
+              <label className="auth-field">
+                <span>Password</span>
+                <input
+                  className="auth-input"
+                  type="password"
+                  autoComplete="current-password"
+                  value={pw}
+                  onChange={(e) => setPw(e.target.value)}
+                  required
+                />
+              </label>
+              <button
+                id="password-sign-in-btn"
+                type="submit"
+                className="btn-primary"
+                disabled={password.busy || !username.trim() || !pw}
+              >
+                {password.busy ? "Signing in…" : "Sign in"}
+              </button>
+              <p className="auth-hint">
+                No username yet? Sign in with your passkey first, then open your
+                account menu (top right) and choose a username and password.
+              </p>
+            </form>
+          )}
+        </section>
       </main>
     </div>
   );
@@ -167,10 +289,10 @@ function ConnectGate({ auth }: { auth: MemphisConnectAuth }) {
 
 function NotesApp({
   tokenHex,
-  auth,
+  session,
 }: {
   tokenHex: string;
-  auth: MemphisConnectAuth;
+  session: ActiveSession;
 }) {
   // ── State ──────────────────────────────────────────────
   const [notes, setNotes] = useState<Note[]>([]);
@@ -189,7 +311,7 @@ function NotesApp({
   const [darkMode, setDarkMode] = useState(false);
   const [view, setView] = useState<ViewMode>("mine");
   const [showEditor, setShowEditor] = useState(false);
-  const [showPreviewBanner, setShowPreviewBanner] = useState(true);
+  const [showAccount, setShowAccount] = useState(false);
 
   // Feed
   const [feedNotes, setFeedNotes] = useState<FeedNote[]>([]);
@@ -245,6 +367,12 @@ function NotesApp({
       setError("");
       setNotes(await listNotes(tokenHex));
     } catch (e) {
+      // A password session the contract no longer knows (expired, or the
+      // password was changed) falls through to the passkey check and fails.
+      if (session.method === "password" && /Memphis:|session expired/i.test(String(e))) {
+        session.signOut();
+        return;
+      }
       setError(String(e));
     }
   }
@@ -467,27 +595,18 @@ function NotesApp({
 
         <div className="navbar-actions">
 
-          {/* Passkey identity */}
+          {/* Account: shows who is signed in, opens login settings */}
           <button
             id="identity-btn"
             type="button"
-            className={`btn-identity${auth.signedIn ? " signed-in" : ""}`}
-            onClick={() => {
-              if (auth.signedIn) {
-                auth.signOut();
-              } else {
-                auth.signIn({ mode: "auto" }).catch(() => {});
-              }
-            }}
-            disabled={auth.busy}
-            aria-label={auth.signedIn ? `Signed in as ${auth.displayName}` : "Sign in with passkey"}
+            className="btn-identity signed-in"
+            onClick={() => setShowAccount(true)}
+            aria-haspopup="dialog"
+            aria-label={`Account: signed in as ${session.displayName}`}
+            title="Account & login settings"
           >
-            <span aria-hidden="true">⚷</span>
-            {auth.signedIn
-              ? auth.displayName || "Identity"
-              : auth.busy
-              ? "Signing in…"
-              : "Passkey Identity"}
+            <span aria-hidden="true">{session.method === "passkey" ? "⚷" : "🔑"}</span>
+            {session.displayName}
           </button>
 
           {/* Balance */}
@@ -526,44 +645,6 @@ function NotesApp({
 
       {/* ─── PAGE CONTENT ─── */}
       <main className="page-content" role="main">
-
-        {/* Error from auth */}
-        {auth.error && (
-          <div className="error-banner" role="alert">
-            <span aria-hidden="true">⚠</span>
-            {auth.error}
-          </div>
-        )}
-
-        {/* Preview banner — only show when not signed in */}
-        {!auth.signedIn && showPreviewBanner && (
-          <div className="preview-banner" role="status">
-            <span className="preview-banner-icon">✦</span>
-            <div className="preview-banner-body">
-              <p className="preview-banner-title">Decentralized Note Vault · Preview Active</p>
-              <p className="preview-banner-desc">
-                You are currently exploring in local preview mode. Sign in with Memphis passkey to sync notes with the on-chain canister smart contract.
-              </p>
-            </div>
-            <button
-              type="button"
-              className="preview-banner-cta"
-              onClick={() => auth.signIn({ mode: "auto" }).catch(() => {})}
-              disabled={auth.busy}
-            >
-              <span>⚷</span>
-              Connect Passkey
-            </button>
-            <button
-              type="button"
-              className="preview-banner-dismiss"
-              onClick={() => setShowPreviewBanner(false)}
-              aria-label="Dismiss banner"
-            >
-              ×
-            </button>
-          </div>
-        )}
 
         {/* Error from notes operations */}
         {error && (
@@ -832,6 +913,11 @@ function NotesApp({
         />
       )}
 
+      {/* ─── ACCOUNT MODAL ─── */}
+      {showAccount && (
+        <AccountModal session={session} onClose={() => setShowAccount(false)} />
+      )}
+
       {/* ─── DELETE MODAL ─── */}
       {deleteId !== null && (
         <div
@@ -873,6 +959,196 @@ function NotesApp({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────
+//  AccountModal — who is signed in + username/password settings
+// ────────────────────────────────────────────────────────────
+
+function AccountModal({
+  session,
+  onClose,
+}: {
+  session: ActiveSession;
+  onClose: () => void;
+}) {
+  const [current, setCurrent] = useState<string | null>(null); // null = loading
+  const [username, setUsername] = useState("");
+  const [pw, setPw] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [formError, setFormError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    getUsername(session.token)
+      .then((u) => {
+        if (cancelled) return;
+        setCurrent(u);
+        setUsername(u);
+      })
+      .catch(() => {
+        if (!cancelled) setCurrent("");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session.token]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  async function handleSave(e: React.FormEvent) {
+    e.preventDefault();
+    setMessage("");
+    setFormError("");
+
+    const u = normalizeUsername(username);
+    if (!isValidUsername(u)) {
+      setFormError("Usernames are 3–32 characters: a–z, 0–9, dot, dash or underscore.");
+      return;
+    }
+    if (pw.length < MIN_PASSWORD_LENGTH) {
+      setFormError(`Use at least ${MIN_PASSWORD_LENGTH} characters for the password.`);
+      return;
+    }
+    if (pw !== pw2) {
+      setFormError("The two passwords don't match.");
+      return;
+    }
+    if (!session.passkeyToken) return;
+
+    try {
+      setBusy(true);
+      const key = await derivePasswordKey(u, pw);
+      await setPassword(session.passkeyToken, u, key);
+      setCurrent(u);
+      setUsername(u);
+      setPw("");
+      setPw2("");
+      setMessage(`Saved. You can now sign in as “${u}” with this password.`);
+    } catch (err) {
+      setFormError(friendlyError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRemove() {
+    if (!session.passkeyToken) return;
+    setMessage("");
+    setFormError("");
+    try {
+      setBusy(true);
+      await removePassword(session.passkeyToken);
+      setCurrent("");
+      setUsername("");
+      setMessage("Username and password removed. Use your passkey to sign in.");
+    } catch (err) {
+      setFormError(friendlyError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className="modal-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="account-modal-title"
+      onClick={onClose}
+    >
+      <div className="delete-modal account-modal" onClick={(e) => e.stopPropagation()}>
+        <p className="delete-modal-eyebrow">Account</p>
+        <h2 id="account-modal-title" className="delete-modal-title">
+          {session.displayName}
+        </h2>
+        <p className="delete-modal-desc">
+          Signed in with {session.method === "passkey" ? "your passkey" : "username & password"}.
+        </p>
+
+        <div className="account-section">
+          <h3 className="account-section-title">Username &amp; password</h3>
+
+          {current === null ? (
+            <p className="auth-hint">Loading…</p>
+          ) : session.method === "password" ? (
+            <p className="auth-hint">
+              To change or remove your password, sign out and sign in with your passkey.
+            </p>
+          ) : (
+            <form className="auth-form" onSubmit={handleSave} noValidate>
+              <p className="auth-hint">
+                {current
+                  ? <>Your username is <strong>{current}</strong>. Enter a new password to change it.</>
+                  : "Add a username and password so you can also sign in without your passkey."}
+              </p>
+              {formError && <p className="auth-error" role="alert">{formError}</p>}
+              {message && <p className="auth-success" role="status">{message}</p>}
+              <label className="auth-field">
+                <span>Username</span>
+                <input
+                  className="auth-input"
+                  type="text"
+                  autoComplete="username"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                />
+              </label>
+              <label className="auth-field">
+                <span>{current ? "New password" : "Password"}</span>
+                <input
+                  className="auth-input"
+                  type="password"
+                  autoComplete="new-password"
+                  value={pw}
+                  onChange={(e) => setPw(e.target.value)}
+                />
+              </label>
+              <label className="auth-field">
+                <span>Confirm password</span>
+                <input
+                  className="auth-input"
+                  type="password"
+                  autoComplete="new-password"
+                  value={pw2}
+                  onChange={(e) => setPw2(e.target.value)}
+                />
+              </label>
+              <div className="account-actions">
+                {current && (
+                  <button type="button" className="btn-cancel" onClick={handleRemove} disabled={busy}>
+                    Remove password
+                  </button>
+                )}
+                <button type="submit" className="btn-save" disabled={busy || !username.trim() || !pw}>
+                  {busy ? "Saving…" : current ? "Change password" : "Save"}
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+
+        <div className="delete-modal-actions">
+          <button type="button" className="btn-cancel" onClick={onClose}>
+            Close
+          </button>
+          <button type="button" className="btn-danger" onClick={session.signOut}>
+            Sign out
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

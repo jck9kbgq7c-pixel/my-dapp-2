@@ -127,3 +127,48 @@ backend/           the backend canister source
 frontend/          the frontend (when scaffolded with one)
   asset_canister.wasm   the asset-serving canister installed for the frontend
 ```
+
+## Username & password login
+
+Besides the Memphis passkey, an account can also be opened with a username
+and password. It is a second way into the SAME account, not a separate one:
+
+1. Sign in with your passkey.
+2. Click your name (top right) → **Username & password** → choose a username
+   and a password (8+ characters) → **Save**.
+3. From then on, the sign-in screen's **Username & password** tab opens the
+   same notes, points and history.
+
+How it works:
+
+- The browser stretches the password with PBKDF2-SHA256 (210,000 rounds,
+  salted with the username) and sends only the resulting key. The contract
+  stores a SHA-256 hash of that key — never the password.
+- A successful login registers a random 32-byte session token (stored as a
+  hash) that is valid for 7 days and is passed to every call like a passkey
+  token. `requireCaller` accepts either kind.
+- Setting, changing or removing the password requires a passkey session.
+  Changing it signs out every password session.
+- Five wrong passwords lock that username for 5 minutes.
+- Backend methods: `setPassword`, `removePassword`, `loginWithPassword`,
+  `logoutPassword`, `getUsername` (code in `backend/Backend.mo`,
+  hashing in `backend/Sha256.mo`, browser side in
+  `frontend/src/lib/usePasswordSession.ts`).
+
+Note: Motoko state resets on every redeploy (see above), so usernames and
+passwords have to be set again after a redeploy, just like notes.
+
+## Hosting the frontend on Vercel
+
+The app also runs from Vercel (or any other host), not only the Thebes gateway.
+
+- `vercel.json` forwards `/api/...` to `https://memphis.mercaturaforum.com/api/...`,
+  where the chain's API lives. There is one in the project root and one in
+  `frontend/`; whichever folder is Vercel's Root Directory picks it up.
+- A passkey token is valid only for the web address it was made on. The frontend
+  sends its address with every call, and the contract accepts only addresses in
+  `ALLOWED_ORIGINS` (top of `backend/Backend.mo`). **Add your Vercel production
+  domain there and run `thebes-deploy deploy`.** Preview links change on every
+  Vercel deploy, so use the production domain.
+- Accounts are the same everywhere: signing in on the gateway or on Vercel gives
+  the same notes, points and history.

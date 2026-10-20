@@ -304,17 +304,25 @@ function encodeTokenArgs(
   out.push(...sleb(TYPE_VEC));
   out.push(...sleb(TYPE_NAT8));
 
-  // Arg types: token (table ref 0) followed by any extra primitives.
-  out.push(...uleb(BigInt(1 + extra.length)));
+  // Every method's second argument is this page's web address. A passkey
+  // token is only valid for the address it was minted on, so the contract
+  // needs to know it (and checks it against its allowlist).
+  const all: ExtraArg[] = [
+    { type: TYPE_TEXT, valueBytes: encodeTextValue(window.location.origin) },
+    ...extra,
+  ];
+
+  // Arg types: token (table ref 0) followed by origin and any extra primitives.
+  out.push(...uleb(BigInt(1 + all.length)));
   out.push(...sleb(0n));
-  for (const e of extra) {
+  for (const e of all) {
     out.push(...sleb(e.type));
   }
 
   // Values, in the same order.
   out.push(...uleb(BigInt(tokenBytes.length)));
   out.push(...Array.from(tokenBytes));
-  for (const e of extra) {
+  for (const e of all) {
     out.push(...e.valueBytes);
   }
 
@@ -361,6 +369,18 @@ function encodeTokenAndFourTexts(
     { type: TYPE_TEXT, valueBytes: encodeTextValue(body) },
     { type: TYPE_TEXT, valueBytes: encodeTextValue(category) },
     { type: TYPE_TEXT, valueBytes: encodeTextValue(color) },
+  ]);
+}
+
+// (blob token, text, text) — setPassword() / loginWithPassword()
+function encodeTokenAndTwoTexts(
+  tokenHex: string,
+  a: string,
+  b: string
+): string {
+  return encodeTokenArgs(tokenHex, [
+    { type: TYPE_TEXT, valueBytes: encodeTextValue(a) },
+    { type: TYPE_TEXT, valueBytes: encodeTextValue(b) },
   ]);
 }
 
@@ -1702,12 +1722,20 @@ async function pollReceiptHex(
           return response.reply || "";
         }
 
-        throw new Error(
+        // A definite failure from the contract (e.g. a trap). Rethrow at
+        // once instead of retrying it as if it were a network blip.
+        const chainError = new Error(
           response.error ||
             "call failed on chain"
-        );
+        ) as Error & { fromChain?: boolean };
+        chainError.fromChain = true;
+        throw chainError;
       }
     } catch (e) {
+      if ((e as { fromChain?: boolean } | null)?.fromChain) {
+        throw e;
+      }
+
       transientPolls++;
 
       if (
@@ -1944,5 +1972,53 @@ export async function removeNote(
     );
   }
 
+  return result;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Username + password login (a second way into a passkey account)
+// ─────────────────────────────────────────────────────────────
+
+async function expectBool(method: string, argHex: string): Promise<boolean> {
+  const result = await call(method, argHex);
+  if (typeof result !== "boolean") {
+    throw new Error(`${method}: expected Bool reply`);
+  }
+  return result;
+}
+
+/** Attach or change the username + password. Needs a PASSKEY token. */
+export function setPassword(
+  passkeyTokenHex: string,
+  username: string,
+  keyHex: string
+): Promise<boolean> {
+  return expectBool("setPassword", encodeTokenAndTwoTexts(passkeyTokenHex, username, keyHex));
+}
+
+/** Remove the username + password. Needs a PASSKEY token. */
+export function removePassword(passkeyTokenHex: string): Promise<boolean> {
+  return expectBool("removePassword", encodeTokenOnly(passkeyTokenHex));
+}
+
+/** Returns true when the username + password are correct. */
+export function loginWithPassword(
+  sessionTokenHex: string,
+  username: string,
+  keyHex: string
+): Promise<boolean> {
+  return expectBool("loginWithPassword", encodeTokenAndTwoTexts(sessionTokenHex, username, keyHex));
+}
+
+export function logoutPassword(sessionTokenHex: string): Promise<boolean> {
+  return expectBool("logoutPassword", encodeTokenOnly(sessionTokenHex));
+}
+
+/** The username on this account, or "" when none is set. */
+export async function getUsername(tokenHex: string): Promise<string> {
+  const result = await call("getUsername", encodeTokenOnly(tokenHex));
+  if (typeof result !== "string") {
+    throw new Error("getUsername: expected Text reply");
+  }
   return result;
 }
