@@ -9,11 +9,21 @@
  * then passed to every contract call exactly like a passkey token.
  */
 import { useCallback, useState } from "react";
-import { BACKEND_CANISTER_ID, loginWithPassword, logoutPassword } from "../thebes";
+import { BACKEND_CANISTER_ID, loginWithPassword, logoutPassword, registerWithPassword } from "../thebes";
 
 const STORAGE_KEY = `thebes-notes:password-session:${BACKEND_CANISTER_ID}`;
 const SESSION_MS = 7 * 24 * 60 * 60 * 1000; // matches the contract's 7 days
 const PBKDF2_ITERATIONS = 210_000;
+const LAST_USER_KEY = `thebes-notes:last-username:${BACKEND_CANISTER_ID}`;
+
+/** The username last used on this browser, to pre-fill the sign-in form. */
+export function lastUsername(): string {
+  try {
+    return localStorage.getItem(LAST_USER_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
 
 export type PasswordSession = {
   username: string;
@@ -99,6 +109,17 @@ export function usePasswordSession() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
+  const begin = (username: string, token: string) => {
+    const s: PasswordSession = { username, token, expiresAt: Date.now() + SESSION_MS - 60_000 };
+    writeStored(s);
+    try {
+      localStorage.setItem(LAST_USER_KEY, username);
+    } catch {
+      // ignore
+    }
+    setSession(s);
+  };
+
   const signIn = useCallback(async (username: string, password: string) => {
     setBusy(true);
     setError(undefined);
@@ -112,15 +133,39 @@ export function usePasswordSession() {
       const ok = await loginWithPassword(token, u, key);
       if (!ok) throw new Error("Wrong username or password.");
 
-      const s: PasswordSession = { username: u, token, expiresAt: Date.now() + SESSION_MS - 60_000 };
-      writeStored(s);
-      setSession(s);
+      begin(u, token);
     } catch (e) {
       setError(friendlyError(e));
     } finally {
       setBusy(false);
     }
   }, []);
+
+  const signUp = useCallback(async (username: string, password: string, confirm: string) => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      const u = normalizeUsername(username);
+      if (!isValidUsername(u)) {
+        throw new Error("Usernames are 3–32 characters: a–z, 0–9, dot, dash or underscore.");
+      }
+      if (password.length < MIN_PASSWORD_LENGTH) {
+        throw new Error(`Use at least ${MIN_PASSWORD_LENGTH} characters for the password.`);
+      }
+      if (password !== confirm) throw new Error("The two passwords don't match.");
+
+      const key = await derivePasswordKey(u, password);
+      const token = newSessionToken();
+      await registerWithPassword(token, u, key);
+      begin(u, token);
+    } catch (e) {
+      setError(friendlyError(e));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  const clearError = useCallback(() => setError(undefined), []);
 
   const signOut = useCallback(() => {
     const current = readStored();
@@ -129,5 +174,5 @@ export function usePasswordSession() {
     if (current) logoutPassword(current.token).catch(() => {});
   }, []);
 
-  return { session, busy, error, signIn, signOut };
+  return { session, busy, error, signIn, signUp, signOut, clearError };
 }

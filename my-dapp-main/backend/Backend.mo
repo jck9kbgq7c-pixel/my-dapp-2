@@ -4,6 +4,8 @@ import Principal "mo:core/Principal";
 import Blob "mo:core/Blob";
 import Runtime "mo:core/Runtime";
 import Text "mo:core/Text";
+import Nat "mo:core/Nat";
+import Nat8 "mo:core/Nat8";
 import MemphisAuth "mo:thebes-lib/MemphisAuth";
 import Sha256 "Sha256";
 
@@ -153,6 +155,29 @@ persistent actor Notes {
   };
 
   var passwordLogins : [PasswordLogin] = [];
+  var nextPasswordAccount : Nat = 0;
+
+  // A brand-new account made with username + password (no passkey) needs its
+  // own principal. Derive a unique 29-byte one from the username and a counter.
+  // Its last byte (0x7f) is not used by any Internet Computer principal kind,
+  // so it can never collide with a passkey user's principal.
+  func newPasswordPrincipal(username : Text) : Principal {
+    let h = Blob.toArray(
+      Sha256.hash(Text.encodeUtf8("thebes-notes/password-account/v1|" # username # "|" # Nat.toText(nextPasswordAccount)))
+    );
+    nextPasswordAccount += 1;
+    let bytes = Array.tabulate<Nat8>(29, func(i : Nat) : Nat8 { if (i < 28) h[i] else (0x7f : Nat8) });
+    Principal.fromBlob(Array.toBlob(bytes));
+  };
+
+  func startPasswordSession(sessionToken : Blob, principal : Principal, now : Int) {
+    let live = Array.filter<PasswordSession>(passwordSessions, func(s : PasswordSession) : Bool { s.expiresAt > now });
+    passwordSessions := appendOne(live, {
+      tokenHash = Sha256.hash(sessionToken);
+      principal;
+      expiresAt = now + SESSION_NS;
+    });
+  };
   var passwordSessions : [PasswordSession] = [];
   var failedLogins : [FailedLogins] = [];
 
@@ -371,16 +396,78 @@ persistent actor Notes {
         };
 
         clearFailures(u);
-        let live = Array.filter<PasswordSession>(passwordSessions, func(s : PasswordSession) : Bool { s.expiresAt > now });
-        passwordSessions := appendOne(live, {
-          tokenHash = Sha256.hash(sessionToken);
-          principal = login.principal;
-          expiresAt = now + SESSION_NS;
-        });
+        startPasswordSession(sessionToken, login.principal, now);
         ignore ensureBalance(login.principal);
         true;
       };
     };
+  };
+
+  /// Create a NEW account with just a username + password (no passkey).
+  /// `sessionToken` is 32 random bytes made by the browser; on success the
+  /// person is signed in right away. Gets the usual 100 starting points.
+  public func registerWithPassword(sessionToken : Blob, _origin : Text, username : Text, keyHex : Text) : async Bool {
+    let u = Text.toLower(username);
+    let now = Time.now();
+
+    if (sessionToken.size() != 32) {
+      Runtime.trap("invalid session token");
+    };
+    if (not isValidUsername(u)) {
+      Runtime.trap("username must be 3-32 characters: a-z, 0-9, dot, dash or underscore");
+    };
+    if (not isValidKeyHex(keyHex)) {
+      Runtime.trap("invalid password key");
+    };
+    if (Array.find<PasswordLogin>(passwordLogins, func(l : PasswordLogin) : Bool { l.username == u }) != null) {
+      Runtime.trap("username already taken");
+    };
+
+    let principal = newPasswordPrincipal(u);
+    passwordLogins := appendOne(passwordLogins, { username = u; principal; keyHash = keyHashFor(u, keyHex) });
+    startPasswordSession(sessionToken, principal, now);
+    ignore ensureBalance(principal);
+    true;
+  };
+
+  /// Change the password by giving the current one. Works from any session.
+  /// Returns false if the current password is wrong. Signs out every OTHER
+  /// password session of this account.
+  public func changePassword(token : Blob, origin : Text, currentKeyHex : Text, newKeyHex : Text) : async Bool {
+    let caller = await* requireCaller(token, origin);
+    let now = Time.now();
+
+    let login = switch (Array.find<PasswordLogin>(passwordLogins, func(l : PasswordLogin) : Bool { l.principal == caller })) {
+      case (?l) { l };
+      case null { Runtime.trap("no password is set on this account") };
+    };
+
+    switch (failuresFor(login.username)) {
+      case (?f) {
+        if (f.lockedUntil > now) {
+          Runtime.trap("too many failed attempts - try again in a few minutes");
+        };
+      };
+      case null {};
+    };
+
+    if (not isValidKeyHex(currentKeyHex) or login.keyHash != keyHashFor(login.username, currentKeyHex)) {
+      recordFailure(login.username, now);
+      return false;
+    };
+    if (not isValidKeyHex(newKeyHex)) {
+      Runtime.trap("invalid password key");
+    };
+
+    clearFailures(login.username);
+    let others = Array.filter<PasswordLogin>(passwordLogins, func(l : PasswordLogin) : Bool { l.principal != caller });
+    passwordLogins := appendOne(others, { login with keyHash = keyHashFor(login.username, newKeyHex) });
+    let keep = Sha256.hash(token);
+    passwordSessions := Array.filter<PasswordSession>(
+      passwordSessions,
+      func(s : PasswordSession) : Bool { s.principal != caller or s.tokenHash == keep },
+    );
+    true;
   };
 
   /// End a password session.

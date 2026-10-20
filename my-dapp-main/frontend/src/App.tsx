@@ -13,6 +13,7 @@ import {
   getUsername,
   setPassword,
   removePassword,
+  changePassword,
 } from "./thebes";
 import type { FeedNote, TipRecord } from "./thebes";
 import { useMemphisConnect } from "./lib/useMemphisConnect";
@@ -23,6 +24,7 @@ import {
   isValidUsername,
   normalizeUsername,
   friendlyError,
+  lastUsername,
   MIN_PASSWORD_LENGTH,
 } from "./lib/usePasswordSession";
 import "./App.css";
@@ -168,9 +170,24 @@ function ConnectGate({
   passkey: MemphisConnectAuth;
   password: ReturnType<typeof usePasswordSession>;
 }) {
-  const [method, setMethod] = useState<"passkey" | "password">("passkey");
-  const [username, setUsername] = useState("");
+  type Tab = "signup" | "signin" | "passkey";
+  const [tab, setTab] = useState<Tab>(() => (lastUsername() ? "signin" : "signup"));
+  const [username, setUsername] = useState(() => lastUsername());
   const [pw, setPw] = useState("");
+  const [pw2, setPw2] = useState("");
+
+  function switchTab(next: Tab) {
+    setTab(next);
+    setPw("");
+    setPw2("");
+    password.clearError();
+  }
+
+  const tabs: { id: Tab; icon: string; label: string }[] = [
+    { id: "signup", icon: "✦", label: "Create account" },
+    { id: "signin", icon: "🔑", label: "Sign in" },
+    { id: "passkey", icon: "⚷", label: "Passkey" },
+  ];
 
   return (
     <div className="page-root">
@@ -186,36 +203,32 @@ function ConnectGate({
 
       <main className="page-content" role="main">
         <section className="auth-panel" aria-labelledby="auth-title">
-          <h1 id="auth-title" className="auth-title">Sign in to Thebes Notes</h1>
+          <h1 id="auth-title" className="auth-title">
+            {tab === "signup" ? "Create your account" : "Welcome back"}
+          </h1>
           <p className="auth-desc">Your private, on-chain notes.</p>
 
           <div className="view-tabs" role="tablist" aria-label="Sign-in method">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={method === "passkey"}
-              className={`view-tab${method === "passkey" ? " active" : ""}`}
-              onClick={() => setMethod("passkey")}
-            >
-              <span aria-hidden="true">⚷</span> Passkey
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={method === "password"}
-              className={`view-tab${method === "password" ? " active" : ""}`}
-              onClick={() => setMethod("password")}
-            >
-              <span aria-hidden="true">🔑</span> Username &amp; password
-            </button>
+            {tabs.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                role="tab"
+                aria-selected={tab === t.id}
+                className={`view-tab${tab === t.id ? " active" : ""}`}
+                onClick={() => switchTab(t.id)}
+              >
+                <span aria-hidden="true">{t.icon}</span> {t.label}
+              </button>
+            ))}
           </div>
 
-          {method === "passkey" ? (
+          {tab === "passkey" ? (
             <div className="auth-form">
               {passkey.error && <p className="auth-error" role="alert">{passkey.error}</p>}
               <p className="auth-hint">
-                Use your fingerprint, face or screen lock. A new name creates an
-                account; an existing name signs in.
+                Use your fingerprint, face or screen lock through Memphis. Pick the
+                passkey that belongs to the name you type.
               </p>
               <button
                 id="sign-in-btn"
@@ -233,9 +246,16 @@ function ConnectGate({
           ) : (
             <form
               className="auth-form"
+              noValidate
               onSubmit={(e) => {
                 e.preventDefault();
-                void password.signIn(username, pw).then(() => setPw(""));
+                const done = tab === "signup"
+                  ? password.signUp(username, pw, pw2)
+                  : password.signIn(username, pw);
+                void done.then(() => {
+                  setPw("");
+                  setPw2("");
+                });
               }}
             >
               {password.error && <p className="auth-error" role="alert">{password.error}</p>}
@@ -247,9 +267,9 @@ function ConnectGate({
                   autoComplete="username"
                   autoCapitalize="none"
                   spellCheck={false}
+                  placeholder={tab === "signup" ? "e.g. youssef" : ""}
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  required
                 />
               </label>
               <label className="auth-field">
@@ -257,23 +277,44 @@ function ConnectGate({
                 <input
                   className="auth-input"
                   type="password"
-                  autoComplete="current-password"
+                  autoComplete={tab === "signup" ? "new-password" : "current-password"}
+                  placeholder={tab === "signup" ? `At least ${MIN_PASSWORD_LENGTH} characters` : ""}
                   value={pw}
                   onChange={(e) => setPw(e.target.value)}
-                  required
                 />
               </label>
+              {tab === "signup" && (
+                <label className="auth-field">
+                  <span>Confirm password</span>
+                  <input
+                    className="auth-input"
+                    type="password"
+                    autoComplete="new-password"
+                    value={pw2}
+                    onChange={(e) => setPw2(e.target.value)}
+                  />
+                </label>
+              )}
               <button
-                id="password-sign-in-btn"
+                id={tab === "signup" ? "sign-up-btn" : "password-sign-in-btn"}
                 type="submit"
                 className="btn-primary"
-                disabled={password.busy || !username.trim() || !pw}
+                disabled={password.busy || !username.trim() || !pw || (tab === "signup" && !pw2)}
               >
-                {password.busy ? "Signing in…" : "Sign in"}
+                {password.busy
+                  ? tab === "signup" ? "Creating account…" : "Signing in…"
+                  : tab === "signup" ? "Create account" : "Sign in"}
               </button>
               <p className="auth-hint">
-                No username yet? Sign in with your passkey first, then open your
-                account menu (top right) and choose a username and password.
+                {tab === "signup" ? (
+                  <>Already have an account?{" "}
+                    <button type="button" className="auth-link" onClick={() => switchTab("signin")}>Sign in</button>
+                  </>
+                ) : (
+                  <>New here?{" "}
+                    <button type="button" className="auth-link" onClick={() => switchTab("signup")}>Create an account</button>
+                  </>
+                )}
               </p>
             </form>
           )}
@@ -369,7 +410,7 @@ function NotesApp({
     } catch (e) {
       // A password session the contract no longer knows (expired, or the
       // password was changed) falls through to the passkey check and fails.
-      if (session.method === "password" && /Memphis:|session expired/i.test(String(e))) {
+      if (session.method === "password" && /Memphis:|session expired|origin not allowed/i.test(String(e))) {
         session.signOut();
         return;
       }
@@ -981,6 +1022,7 @@ function AccountModal({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [formError, setFormError] = useState("");
+  const [curPw, setCurPw] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -1042,6 +1084,41 @@ function AccountModal({
     }
   }
 
+  async function handleChange(e: React.FormEvent) {
+    e.preventDefault();
+    setMessage("");
+    setFormError("");
+    const u = current || session.displayName;
+    if (pw.length < MIN_PASSWORD_LENGTH) {
+      setFormError(`Use at least ${MIN_PASSWORD_LENGTH} characters for the new password.`);
+      return;
+    }
+    if (pw !== pw2) {
+      setFormError("The two new passwords don't match.");
+      return;
+    }
+    try {
+      setBusy(true);
+      const [oldKey, newKey] = await Promise.all([
+        derivePasswordKey(u, curPw),
+        derivePasswordKey(u, pw),
+      ]);
+      const ok = await changePassword(session.token, oldKey, newKey);
+      if (!ok) {
+        setFormError("Your current password is wrong.");
+        return;
+      }
+      setCurPw("");
+      setPw("");
+      setPw2("");
+      setMessage("Password changed. Other devices were signed out.");
+    } catch (err) {
+      setFormError(friendlyError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleRemove() {
     if (!session.passkeyToken) return;
     setMessage("");
@@ -1082,9 +1159,48 @@ function AccountModal({
           {current === null ? (
             <p className="auth-hint">Loading…</p>
           ) : session.method === "password" ? (
-            <p className="auth-hint">
-              To change or remove your password, sign out and sign in with your passkey.
-            </p>
+            <form className="auth-form" onSubmit={handleChange} noValidate>
+              <p className="auth-hint">
+                Your username is <strong>{current || session.displayName}</strong>.
+              </p>
+              {formError && <p className="auth-error" role="alert">{formError}</p>}
+              {message && <p className="auth-success" role="status">{message}</p>}
+              <label className="auth-field">
+                <span>Current password</span>
+                <input
+                  className="auth-input"
+                  type="password"
+                  autoComplete="current-password"
+                  value={curPw}
+                  onChange={(e) => setCurPw(e.target.value)}
+                />
+              </label>
+              <label className="auth-field">
+                <span>New password</span>
+                <input
+                  className="auth-input"
+                  type="password"
+                  autoComplete="new-password"
+                  value={pw}
+                  onChange={(e) => setPw(e.target.value)}
+                />
+              </label>
+              <label className="auth-field">
+                <span>Confirm new password</span>
+                <input
+                  className="auth-input"
+                  type="password"
+                  autoComplete="new-password"
+                  value={pw2}
+                  onChange={(e) => setPw2(e.target.value)}
+                />
+              </label>
+              <div className="account-actions">
+                <button type="submit" className="btn-save" disabled={busy || !curPw || !pw}>
+                  {busy ? "Saving…" : "Change password"}
+                </button>
+              </div>
+            </form>
           ) : (
             <form className="auth-form" onSubmit={handleSave} noValidate>
               <p className="auth-hint">

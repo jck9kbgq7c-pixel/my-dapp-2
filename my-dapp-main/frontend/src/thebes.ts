@@ -2022,3 +2022,21 @@ export async function getUsername(tokenHex: string): Promise<string> {
   }
   return result;
 }
+
+/** Create a NEW account with a username + password. Signs in with sessionToken. */
+export function registerWithPassword(
+  sessionTokenHex: string,
+  username: string,
+  keyHex: string
+): Promise<boolean> {
+  return expectBool("registerWithPassword", encodeTokenAndTwoTexts(sessionTokenHex, username, keyHex));
+}
+
+/** Change the password. Returns false if the current password is wrong. */
+export function changePassword(
+  tokenHex: string,
+  currentKeyHex: string,
+  newKeyHex: string
+): Promise<boolean> {
+  return expectBool("changePassword", encodeTokenAndTwoTexts(tokenHex, currentKeyHex, newKeyHex));
+}

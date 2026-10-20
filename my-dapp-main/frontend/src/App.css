@@ -2081,3 +2081,42 @@ a {
   justify-content: flex-end;
   gap: 10px;
 }
+
+.auth-link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--primary);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.auth-link:hover {
+  text-decoration: underline;
+}
+
+.auth-panel .view-tab {
+  flex: 1 1 auto;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.auth-panel .view-tabs {
+  width: 100%;
+}
+
+.auth-panel .view-tab {
+  padding: 0 10px;
+}
+
+@media (max-width: 420px) {
+  .auth-panel {
+    padding: 24px 20px;
+  }
+
+  .auth-panel .view-tab {
+    padding: 0 6px;
+    gap: 4px;
+  }
+}

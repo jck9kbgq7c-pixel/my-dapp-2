@@ -128,35 +128,37 @@ frontend/          the frontend (when scaffolded with one)
   asset_canister.wasm   the asset-serving canister installed for the frontend
 ```
 
-## Username & password login
+## Accounts: username & password, or passkey
 
-Besides the Memphis passkey, an account can also be opened with a username
-and password. It is a second way into the SAME account, not a separate one:
+The sign-in screen has three tabs:
 
-1. Sign in with your passkey.
-2. Click your name (top right) → **Username & password** → choose a username
-   and a password (8+ characters) → **Save**.
-3. From then on, the sign-in screen's **Username & password** tab opens the
-   same notes, points and history.
+- **Create account** — pick a username and a password (8+ characters). No
+  passkey needed. New accounts start with 100 points like everyone else.
+- **Sign in** — username + password, on any device.
+- **Passkey** — Memphis passkey sign-in, as before. A passkey user can also
+  attach a username + password to the same account from the account menu.
+
+Click your name (top right) to change your password or sign out.
 
 How it works:
 
 - The browser stretches the password with PBKDF2-SHA256 (210,000 rounds,
   salted with the username) and sends only the resulting key. The contract
   stores a SHA-256 hash of that key — never the password.
-- A successful login registers a random 32-byte session token (stored as a
-  hash) that is valid for 7 days and is passed to every call like a passkey
+- A successful sign-up or sign-in registers a random 32-byte session token
+  (stored as a hash) valid for 7 days, passed to every call like a passkey
   token. `requireCaller` accepts either kind.
-- Setting, changing or removing the password requires a passkey session.
-  Changing it signs out every password session.
+- A password-only account gets its own unique principal, derived in the
+  contract; it can never clash with a passkey user's principal.
+- Changing the password needs the current one and signs out other devices.
 - Five wrong passwords lock that username for 5 minutes.
-- Backend methods: `setPassword`, `removePassword`, `loginWithPassword`,
-  `logoutPassword`, `getUsername` (code in `backend/Backend.mo`,
-  hashing in `backend/Sha256.mo`, browser side in
-  `frontend/src/lib/usePasswordSession.ts`).
+- Backend methods: `registerWithPassword`, `loginWithPassword`,
+  `logoutPassword`, `changePassword`, `setPassword` / `removePassword`
+  (passkey accounts), `getUsername`. Code: `backend/Backend.mo`,
+  `backend/Sha256.mo`, `frontend/src/lib/usePasswordSession.ts`.
 
-Note: Motoko state resets on every redeploy (see above), so usernames and
-passwords have to be set again after a redeploy, just like notes.
+Note: Motoko state resets on every redeploy (see above), so accounts made
+with a username + password are wiped by a redeploy, just like notes.
 
 ## Hosting the frontend on Vercel
 
